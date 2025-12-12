@@ -2,7 +2,7 @@
 
 O Fine-tuning de um modelo de linguagem de grande escala (LLM) consiste em utilizar um modelo base pré-treinado e **treiná-lo adicionalmente em um dataset menor e específico de domínio**, com o objetivo de adaptar o conhecimento do modelo a uma tarefa ou área. Essa abordagem é mais eficiente do que treinar do zero, pois o modelo base já codifica padrões gerais de linguagem e fatos aprendidos a partir de um corpus amplo. Com o fine-tuning, **preserva-se o conhecimento geral do modelo** e **o comportamento é especializado** para o caso de uso.
 
-Este artigo descreve o fine-tuning de um LLM open-source — **Qwen2.5-1.5B Instruct** (modelo com 1,5 bilhão de parâmetros) — em um **dataset de perguntas e respostas médicas** no formato de flashcards. O objetivo é especializar o Qwen2.5 como um assistente médico capaz de responder perguntas clínicas e biomédicas com maior precisão. Para viabilizar o treinamento em uma única GPU, é utilizado um método parameter-efficient chamado **QLoRA (Quantized LoRA)** no Google Colab (NVIDIA T4 com 16 GB de VRAM), com tempo de treinamento em torno de **2 horas**. Ao longo do texto, são apresentados conceitos como LoRA e QLoRA, são fornecidos trechos de código para cada etapa e é comparado o desempenho do **modelo base vs. modelo com fine-tuning** em perguntas médicas.
+Este artigo descreve o fine-tuning de um LLM open-source — **Qwen2.5-1.5B Instruct** (modelo com 1,5 bilhão de parâmetros) — em um **dataset de perguntas e respostas médicas** no formato de flashcards. O objetivo é especializar o Qwen2.5 como um assistente médico capaz de responder perguntas clínicas e biomédicas com maior precisão. Para viabilizar o treinamento em uma única GPU, é utilizado um método parameter-efficient chamado **QLoRA (Quantized LoRA)** no Google Colab (NVIDIA T4 com 16 GB de VRAM), com tempo de treinamento em torno de 2 horas. Ao longo do texto, são apresentados conceitos como LoRA e QLoRA, são fornecidos trechos de código para cada etapa e é comparado o desempenho do **modelo base vs. modelo com fine-tuning** em perguntas médicas.
 
 ## O que é LoRA (Low-Rank Adaptation)?
 
@@ -24,7 +24,7 @@ Com esses conceitos estabelecidos, o fluxo completo do projeto é descrito a seg
 
 O ambiente é configurado em um notebook do Google Colab com GPU. O Colab (ou qualquer ambiente Jupyter com GPU) facilita a execução interativa do código de treinamento. O runtime utilizado disponibiliza uma NVIDIA T4 (~16 GB de VRAM), suficiente para um modelo de 1.5B com quantization em 4 bits. O processo completo (uma epoch em ~34k exemplos) leva aproximadamente **2 horas** nessa configuração.
 
-Instalação das bibliotecas necessárias: Transformers (modelo e tokenizer), Datasets (carregamento de dados), Accelerate e PEFT (suporte a LoRA/QLoRA), BitsAndBytes (quantization em 4 bits), TRL (opcional, utilitários de treinamento) e Evaluate (métricas, se necessário):
+Instalação das bibliotecas necessárias: Transformers (modelo e tokenizer), Datasets (carregamento de dados), Accelerate e PEFT (suporte a LoRA/QLoRA), BitsAndBytes (quantization em 4 bits), TRL (opcional, utilitários de treinamento) e Evaluate (métricas):
 
 ```bash
 !pip -q install -U pip
@@ -75,7 +75,7 @@ ADAPTER_OUTPUT_DIR = "outputs/adapter"
 O dataset `flwrlabs/medical-meadow-medical-flashcards`, disponível no Hugging Face, contém pares de perguntas e respostas formatados para instruction tuning. Cada amostra possui **instruction**, **input** e **output**:
 
 - **instruction:** um prompt ou diretriz (por exemplo *"Answer this question truthfully"*, frequentemente usada para orientar a resposta).
-- **input:** a pergunta médica propriamente dita (por exemplo *"What are the contraindications for using β-blockers?"*).
+- **input:** a pergunta médica (por exemplo *"What are the contraindications for using β-blockers?"*).
 - **output:** a resposta de referência.
 
 O dataset possui apenas o split "train" (33.955 flashcards no total), portanto é criado manualmente um split de teste com 5% para avaliação:
@@ -129,7 +129,7 @@ O método `tokenizer.apply_chat_template` formata a lista de mensagens para a se
 
 ```
 <system>You are a helpful medical assistant.</system>
-<user>What are the precautions and contraindications for the use of β-blockers?</user>
+<user>Answer this question truthfully. What are the precautions and contraindications for the use of β-blockers?</user>
 <assistant>β-blockers must be used cautiously in decompensated heart failure and are contraindicated in cardiogenic shock...</assistant>
 ```
 
@@ -165,7 +165,7 @@ def data_collator(features):
     return batch
 ```
 
-Nesse ponto, o dataset está pronto: prompts formatados e tokenizados, com collator para padding dinâmico durante o batching.
+Nesse ponto, o dataset está pronto: prompts formatados e tokenizados.
 
 ## Carregamento do Qwen2.5 em 4-bit e aplicação de LoRA
 
@@ -175,7 +175,7 @@ Com os dados preparados, o setup do modelo para QLoRA envolve:
 2. **Preparar o modelo para k-bit training** (ajustes necessários ao treinar com pesos 4-bit/8-bit).
 3. **Configurar LoRA** e anexar adapters ao modelo.
 
-**BitsAndBytes 4-bit Quantization:** `BitsAndBytesConfig` (Transformers) é usado para especificar carregamento em 4-bit. As opções seguem recomendações do paper de QLoRA: `bnb_4bit_quant_type="nf4"` (NormalFloat, melhora a acurácia do quantization) e `bnb_4bit_use_double_quant=True` (double quantization para outliers, reduzindo memória). `bnb_4bit_compute_dtype=torch.bfloat16` é definido para realizar compute em bfloat16 (preferível para estabilidade em hardware recente).
+**BitsAndBytes 4-bit Quantization:** `BitsAndBytesConfig` (Transformers) é usado para especificar carregamento em 4-bit. As opções seguem recomendações do paper de QLoRA: `bnb_4bit_quant_type="nf4"` (NormalFloat, melhora a acurácia do quantization) e `bnb_4bit_use_double_quant=True` (double quantization para outliers, reduzindo memória). `bnb_4bit_compute_dtype=torch.bfloat16` é definido para realizar compute em bfloat16 (preferível para estabilidade).
 
 Carregamento do modelo:
 
@@ -290,7 +290,7 @@ Início do treinamento:
 trainer.train()
 ```
 
-Durante o treinamento, o loss tende a diminuir, e avaliações ocorrem a cada 50 steps. Com ~32k exemplos de treino e batch efetivo 16, são esperados em torno de 2000 update steps em uma epoch. O tempo observado é de aproximadamente **2 horas**.
+Durante o treinamento, o loss tende a diminuir, e avaliações ocorrem a cada 50 steps. Com ~32k exemplos de treino e batch efetivo 16, foram realizados 2017 update steps em uma epoch.
 
 Ao final, uma avaliação adicional pode ser executada:
 
@@ -309,7 +309,7 @@ model.save_pretrained(ADAPTER_OUTPUT_DIR)
 tokenizer.save_pretrained(ADAPTER_OUTPUT_DIR)
 ```
 
-O `ADAPTER_OUTPUT_DIR` passa a conter o adapter (tipicamente poucos MB) e arquivos do tokenizer. Para usar o modelo depois, o procedimento padrão é carregar `Qwen/Qwen2.5-1.5B-Instruct` e aplicar o adapter com PEFT.
+O `ADAPTER_OUTPUT_DIR` passa a conter o adapter (tipicamente poucos MB) e arquivos do tokenizer. Para usar o modelo depois, o procedimento padrão é carregar o `Qwen/Qwen2.5-1.5B-Instruct` e aplicar o adapter com PEFT.
 
 Opcionalmente, os pesos do LoRA podem ser mesclados no modelo base para gerar um checkpoint único (por exemplo com `PeftModel.merge_and_unload()`). Isso produz um artefato do tamanho total do modelo, aumentando custo de armazenamento; manter o adapter separado costuma ser a escolha mais prática.
 
